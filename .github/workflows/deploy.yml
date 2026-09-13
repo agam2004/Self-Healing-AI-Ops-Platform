@@ -1,0 +1,42 @@
+name: Build and Push
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write   # required to fetch the OIDC token
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: aiops-app
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" ./app
+          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+      # Stage 2 TODO: once the EKS cluster exists, add a step here that
+      # runs `aws eks update-kubeconfig` and `kubectl set image ...`,
+      # then waits on `kubectl rollout status`.
