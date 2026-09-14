@@ -9,3 +9,4 @@ tfplan*
 *.log
 crash.log
 lambda/*.zip
+terraform/.helm/
