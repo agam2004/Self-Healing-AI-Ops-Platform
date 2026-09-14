@@ -12,18 +12,23 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
 
-  # Stage 1 uses local state. Once the S3 bucket + DynamoDB lock table exist
-  # (created in Stage 2 alongside the VPC), uncomment this and run
-  # `terraform init -migrate-state`.
-  # backend "s3" {
-  #   bucket         = "aiops-terraform-state"
-  #   key            = "self-healing-aiops/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   encrypt        = true
-  #   dynamodb_table = "aiops-terraform-lock"
-  # }
+  backend "s3" {
+    bucket         = "aiops-terraform-state-752953536627"
+    key            = "self-healing-aiops/terraform.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "aiops-terraform-lock"
+  }
 }
 
 provider "aws" {

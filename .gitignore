@@ -4,4 +4,8 @@
 *.tfstate.backup
 *.tfvars
 !*.tfvars.example
+tfplan*
+*.tfplan
+*.log
 crash.log
+lambda/*.zip

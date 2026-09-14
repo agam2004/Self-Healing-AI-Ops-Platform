@@ -1,10 +1,9 @@
 # oidc-cicd.tf — GitHub Actions OIDC provider + IAM role for CI/CD
 #
-# Stage 1: only ECR push permissions (no EKS yet — the cluster doesn't exist
-# until Stage 2). Once the EKS module is added, extend
-# `deploy_permissions` with an EKSDescribe statement and add an
-# aws_eks_access_entry / aws_eks_access_policy_association for this role,
-# so `kubectl` from the workflow can actually reach the cluster.
+# Stage 2: the EKS cluster now exists (eks.tf), so this role also gets
+# eks:DescribeCluster (needed for `aws eks update-kubeconfig`) plus a scoped
+# EKS access entry so `kubectl set image` from the workflow can actually
+# reach the cluster — limited to editing Deployments, not cluster-admin.
 
 data "tls_certificate" "github" {
   url = "https://token.actions.githubusercontent.com/.well-known/openid-configuration"
@@ -36,7 +35,9 @@ data "aws_iam_policy_document" "github_trust" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:ref:refs/heads/${var.github_branch}"]
+      # Matches repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:refs/heads/<branch> —
+      # see the github_owner_id/github_repo_id variables for why.
+      values = ["repo:*@${var.github_owner_id}/*@${var.github_repo_id}:ref:refs/heads/${var.github_branch}"]
     }
   }
 }
@@ -68,6 +69,34 @@ data "aws_iam_policy_document" "deploy_permissions" {
       "ecr:CompleteLayerUpload",
     ]
     resources = [aws_ecr_repository.aiops_app.arn]
+  }
+
+  statement {
+    sid    = "EKSDescribe"
+    effect = "Allow"
+    actions = [
+      "eks:DescribeCluster",
+    ]
+    resources = [module.eks.cluster_arn]
+  }
+}
+
+# Grant the CI role just enough Kubernetes RBAC to roll a Deployment image —
+# not cluster-admin. EKS access entries replace the old aws-auth ConfigMap
+# approach and are auditable as plain Terraform-managed resources.
+resource "aws_eks_access_entry" "github_actions" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = aws_iam_role.github_actions.arn
+}
+
+resource "aws_eks_access_policy_association" "github_actions_edit" {
+  cluster_name  = module.eks.cluster_name
+  principal_arn = aws_iam_role.github_actions.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy"
+
+  access_scope {
+    type       = "namespace"
+    namespaces = ["default"]
   }
 }
 
