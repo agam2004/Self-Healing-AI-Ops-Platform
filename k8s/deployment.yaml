@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-app
+  namespace: default
+  labels:
+    app: aiops-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: aiops-app
+  template:
+    metadata:
+      labels:
+        app: aiops-app
+    spec:
+      containers:
+        - name: aiops-app
+          # Placeholder tag — the CI workflow's `kubectl set image` step
+          # replaces this with the freshly built ${{ github.sha }} tag on
+          # every push to main.
+          image: REPLACED_BY_CI
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiops-app
+  namespace: default
+spec:
+  selector:
+    app: aiops-app
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP
