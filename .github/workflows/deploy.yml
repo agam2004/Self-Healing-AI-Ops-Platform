@@ -43,6 +43,18 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 
+      # KNOWN LIMITATION: this step reaches the EKS API over its public
+      # endpoint, which terraform/variables.tf's eks_public_access_cidrs
+      # restricts to one known IP by design (see eks.tf). GitHub-hosted
+      # runners have no stable IP, so as configured this step can only
+      # succeed if that variable is (temporarily) widened, e.g.
+      # `-var='eks_public_access_cidrs=["0.0.0.0/0"]'` — deliberately not
+      # the default, since it trades away the CIDR restriction for CI
+      # convenience. The commands themselves are verified working (run by
+      # hand against the live cluster from an allowlisted IP); what's
+      # unverified end-to-end is only this network path. The correct fix
+      # is a self-hosted runner inside the VPC, so the API endpoint never
+      # needs to be open beyond one trusted IP — not yet built.
       - name: Deploy to EKS
         env:
           IMAGE: ${{ steps.build.outputs.image }}
