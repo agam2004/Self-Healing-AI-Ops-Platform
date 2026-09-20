@@ -12,7 +12,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path == "/healthz":
+        if self.path == "/health":
             self._json(200, {"status": "ok"})
         else:
             self._json(200, {"service": "aiops-app", "message": "hello from the self-healing AI-Ops platform"})
