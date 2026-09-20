@@ -1,0 +1,43 @@
+name: IaC Security Scan
+
+# Only runs when infrastructure actually changed — no point re-scanning
+# Terraform on every app-code commit.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**/*.tf"
+      - "k8s/**/*.yaml"
+      - "gatekeeper-policies.yaml"
+  pull_request:
+    paths:
+      - "terraform/**/*.tf"
+      - "k8s/**/*.yaml"
+      - "gatekeeper-policies.yaml"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  checkov:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkov (Terraform + Kubernetes manifests)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform,kubernetes
+          output_format: sarif
+          output_file_path: checkov.sarif
+          soft_fail: true   # report findings without blocking merges — tune once the baseline is clean
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov.sarif
+          category: checkov

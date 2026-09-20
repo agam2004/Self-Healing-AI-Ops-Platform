@@ -1,0 +1,176 @@
+# gatekeeper-policies.yaml — OPA Gatekeeper admission policy: the last line
+# of defense, enforced directly on the cluster's API server. Everything
+# upstream (Semgrep, Gitleaks, Trivy, Checkov) can be bypassed by someone
+# with kubectl access and no PR review; this can't — the API server itself
+# rejects a non-compliant object at admission time, before it's ever
+# persisted to etcd.
+#
+# Install Gatekeeper first (terraform/gatekeeper.tf), then:
+#   kubectl apply -f gatekeeper-policies.yaml
+#
+# Scope: enforced on workload namespaces (default, aiops, monitoring,
+# blackbox) — deliberately NOT on kube-system, gatekeeper-system, or
+# chaos-mesh. Chaos Mesh's chaos-daemon needs `privileged: true` to
+# manipulate other pods' network namespaces; that's its actual job, not a
+# policy gap, so excluding it is a scoping decision, not an oversight.
+#
+# Demo: gatekeeper/demo-violation.yaml deliberately breaks all three
+# policies at once — `kubectl apply` against it after this file is
+# installed, and capture the rejection. That's the single strongest
+# artifact in this whole project: a live admission-webhook denial, not a
+# claim in a README.
+
+---
+# ============================================================
+# 1. Every container must declare resource requests AND limits.
+#    Without this, one runaway pod can starve every other workload
+#    on a shared node — there's no scheduler-level protection otherwise.
+# ============================================================
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredresources
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredResources
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredresources
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.cpu
+          msg := sprintf("container <%v> is missing spec.resources.limits.cpu", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.limits.memory
+          msg := sprintf("container <%v> is missing spec.resources.limits.memory", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.requests.cpu
+          msg := sprintf("container <%v> is missing spec.resources.requests.cpu", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.resources.requests.memory
+          msg := sprintf("container <%v> is missing spec.resources.requests.memory", [container.name])
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredResources
+metadata:
+  name: require-resource-limits
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    excludedNamespaces:
+      - kube-system
+      - gatekeeper-system
+      - chaos-mesh
+
+---
+# ============================================================
+# 2. No `:latest` tag, and no missing tag (which resolves to `:latest`
+#    anyway). A floating tag means "restart the pod" can silently change
+#    what code is running — the opposite of a reproducible deploy.
+# ============================================================
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdisallowedtags
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDisallowedTags
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            tags:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdisallowedtags
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not contains(container.image, ":")
+          msg := sprintf("container <%v> has image <%v> with no explicit tag (implicitly :latest)", [container.name, container.image])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          disallowed := input.parameters.tags[_]
+          endswith(container.image, concat(":", ["", disallowed]))
+          msg := sprintf("container <%v> uses disallowed tag <%v>", [container.name, disallowed])
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sDisallowedTags
+metadata:
+  name: block-latest-tag
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    excludedNamespaces:
+      - kube-system
+      - gatekeeper-system
+      - chaos-mesh
+  parameters:
+    tags: ["latest"]
+
+---
+# ============================================================
+# 3. No privileged containers. A privileged container has root-equivalent
+#    access to the host node — full device access, no seccomp/AppArmor
+#    confinement — so an app-namespace workload should never need it.
+# ============================================================
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8sdisallowprivileged
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sDisallowPrivileged
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8sdisallowprivileged
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.privileged
+          msg := sprintf("container <%v> sets securityContext.privileged=true", [container.name])
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sDisallowPrivileged
+metadata:
+  name: disallow-privileged-containers
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    excludedNamespaces:
+      - kube-system
+      - gatekeeper-system
+      - chaos-mesh

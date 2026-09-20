@@ -1,0 +1,20 @@
+# Deliberately breaks all three Gatekeeper policies at once:
+#   - no resources.requests/limits            -> K8sRequiredResources
+#   - image tag :latest                       -> K8sDisallowedTags
+#   - securityContext.privileged: true        -> K8sDisallowPrivileged
+#
+# This is meant to fail. Run it after gatekeeper-policies.yaml is applied:
+#   kubectl apply -f gatekeeper/demo-violation.yaml
+# The API server rejects it at admission time — capture that output
+# (`Error from server ([denied by ...] ...)`) as the demo artifact.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: policy-violation-demo
+  namespace: default
+spec:
+  containers:
+    - name: bad-container
+      image: nginx:latest
+      securityContext:
+        privileged: true

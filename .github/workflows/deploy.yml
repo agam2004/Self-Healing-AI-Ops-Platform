@@ -5,8 +5,9 @@ on:
     branches: [main]
 
 permissions:
-  id-token: write   # required to fetch the OIDC token
+  id-token: write     # required to fetch the OIDC token
   contents: read
+  security-events: write   # required to upload SARIF to the Security tab
 
 env:
   AWS_REGION: us-east-1
@@ -14,11 +15,70 @@ env:
   EKS_CLUSTER_NAME: aiops-cluster
 
 jobs:
-  build-and-push:
+  # Gate: nothing builds or deploys until this passes. Each scanner uploads
+  # SARIF to the repo's Security tab regardless of pass/fail, so findings
+  # are visible there even on a red run, not just in the job log.
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Gitleaks needs full history to scan past commits, not just the diff
+
+      - name: Gitleaks (secrets)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
+          GITLEAKS_ENABLE_SUMMARY: true
+
+      - name: Semgrep (SAST)
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: p/ci
+          generateSarif: "1"
+
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Trivy filesystem scan (dependency CVEs)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy fs SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  build-test-deploy:
+    needs: security-scan
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run tests
+        working-directory: app
+        run: python -m unittest test_app.py -v
 
       - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -30,15 +90,34 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push image
+      - name: Build image
         id: build
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" ./app
-          docker push "$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           echo "image=$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy image scan (container CVEs)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.build.outputs.image }}
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy image SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Push image
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: docker push "$IMAGE"
 
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"

@@ -10,3 +10,5 @@ tfplan*
 crash.log
 lambda/*.zip
 terraform/.helm/
+__pycache__/
+*.pyc

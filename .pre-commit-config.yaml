@@ -1,0 +1,17 @@
+# Local shift-left mirror of the CI security-scan job (.github/workflows/deploy.yml):
+# catch a leaked secret before it's committed, not after it's pushed and
+# already in GitHub's history. Install with `pip install pre-commit &&
+# pre-commit install`.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
