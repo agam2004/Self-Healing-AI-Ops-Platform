@@ -26,14 +26,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Real gate, not a report: soft_fail is off. Every one of the 36
+      # currently-accepted findings across terraform/ and k8s/ carries an
+      # inline #checkov:skip / checkov.io/skip annotation with the actual
+      # reasoning (cost trade-off, genuine architectural constraint, or a
+      # false positive in Checkov's own static analysis) — anything that
+      # shows up un-skipped from here on is a real regression, not noise
+      # to triage before this can start blocking merges.
       - name: Checkov (Terraform + Kubernetes manifests)
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
+          # gatekeeper/demo-violation.yaml is deliberately non-compliant
+          # (see gatekeeper-policies.yaml) — it's meant to be rejected by
+          # Gatekeeper on the live cluster, not pre-filtered out of
+          # existence by the same class of check in CI.
+          skip_path: gatekeeper
           framework: terraform,kubernetes
           output_format: sarif
           output_file_path: checkov.sarif
-          soft_fail: true   # report findings without blocking merges — tune once the baseline is clean
+          soft_fail: false
 
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v4

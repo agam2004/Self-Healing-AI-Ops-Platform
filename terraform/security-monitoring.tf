@@ -16,6 +16,10 @@
 # compliance score, not just point-in-time findings.
 
 resource "aws_guardduty_detector" "this" {
+  #checkov:skip=CKV2_AWS_3:this whole file is written and validated but
+  #  deliberately never applied — GuardDuty/Security Hub run continuously
+  #  and bill for it, which doesn't fit a project that's torn down
+  #  between sessions. Documented as a considered, not missing, decision.
   enable = true
 
   datasources {

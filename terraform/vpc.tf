@@ -4,6 +4,10 @@
 # Private subnets: EKS worker nodes and RDS — no direct internet route in.
 
 data "aws_availability_zones" "available" {
+  #checkov:skip=CKV_AWS_394:only the first var.az_count names are ever
+  #  used (via slice() below) — if AWS adds a new AZ to this region, the
+  #  slice still takes just the first N, so there's no silent expansion
+  #  in what this config actually does with the result.
   state = "available"
 }
 
@@ -14,6 +18,12 @@ locals {
 }
 
 module "vpc" {
+  #checkov:skip=CKV_TF_1:pinned to a semver constraint against the
+  #  official terraform-aws-modules registry module, not an arbitrary git
+  #  source — the Terraform Registry itself content-addresses and
+  #  checksums each published version, which is what commit-hash pinning
+  #  exists to approximate for a raw git source. Trading that for easy
+  #  patch-version updates on a widely-used, actively maintained module.
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 5.0"
 

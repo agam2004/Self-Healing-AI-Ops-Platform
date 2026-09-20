@@ -17,9 +17,15 @@ resource "random_password" "db" {
 }
 
 resource "aws_secretsmanager_secret" "db" {
+  #checkov:skip=CKV2_AWS_57:automatic rotation needs a rotation Lambda
+  #  that can reach the DB (more VPC wiring) to actually change the
+  #  password in Postgres, not just in Secrets Manager — real value once
+  #  something is actually connecting to this database, but nothing does
+  #  yet (app.py is stateless; RDS is provisioned ahead of that work).
   name                    = "${var.name_prefix}/rds/master"
   description             = "Master credentials for the ${var.name_prefix} RDS instance"
   recovery_window_in_days = 0 # demo project — allow immediate deletion on `terraform destroy`
+  kms_key_id              = aws_kms_key.rds.arn
 }
 
 resource "aws_secretsmanager_secret_version" "db" {
@@ -40,6 +46,11 @@ resource "aws_db_subnet_group" "this" {
 }
 
 resource "aws_security_group" "rds" {
+  #checkov:skip=CKV_AWS_382:cidr_blocks is an empty list, which AWS
+  #  creates as zero actual egress rules — this security group has no
+  #  egress path at all, the most restrictive state possible. Checkov's
+  #  static check flags the presence of a 0.0.0.0/0-shaped block
+  #  definition without evaluating that its CIDR list is empty.
   name        = "${var.name_prefix}-rds-sg"
   description = "Allow Postgres only from the EKS worker nodes"
   vpc_id      = module.vpc.vpc_id
@@ -63,7 +74,48 @@ resource "aws_security_group_rule" "rds_from_eks_nodes" {
   description              = "Postgres from EKS worker nodes"
 }
 
+# Query logging needs an explicit parameter group — the default one
+# can't be modified in place, and without this Postgres never writes
+# query-level detail into the CloudWatch export above no matter what
+# enabled_cloudwatch_logs_exports says.
+resource "aws_db_parameter_group" "this" {
+  name   = "${var.name_prefix}-postgres16"
+  family = "postgres16"
+
+  parameter {
+    name  = "log_min_duration_statement"
+    value = "1000" # log queries slower than 1s, not every query — real signal without drowning the log group
+  }
+
+  # Rejects any client that connects without TLS — network-layer controls
+  # (private subnets, the EKS-node-only security group) already limit who
+  # can reach port 5432 at all, but this closes the gap of a compromised
+  # pod on an allowed node sniffing plaintext Postgres traffic instead of
+  # actually authenticating.
+  parameter {
+    name  = "rds.force_ssl"
+    value = "1"
+  }
+}
+
 resource "aws_db_instance" "this" {
+  #checkov:skip=CKV_AWS_157:single-AZ keeps a demo database cheap — flip
+  #  to true for a prod story, but a standby that's destroyed and
+  #  recreated every session never has time to earn its extra cost.
+  #checkov:skip=CKV_AWS_293:deletion_protection=false is deliberate —
+  #  this project's whole cost model depends on `terraform destroy`
+  #  completing in one command between sessions (see CLAUDE.md's cost
+  #  note); protection would just mean a second manual step every time.
+  #checkov:skip=CKV_AWS_118:enhanced monitoring bills per-instance for
+  #  metrics nobody is reviewing at this scale — CloudWatch's default
+  #  RDS metrics (free) already cover "is the AI-Ops story healthy."
+  #checkov:skip=CKV_AWS_353:same reasoning as enhanced monitoring —
+  #  Performance Insights has a real ongoing cost for query-level detail
+  #  this stateless demo app doesn't generate enough traffic to need.
+  #checkov:skip=CKV_AWS_161:IAM database authentication would replace
+  #  the Secrets Manager password entirely — real improvement, but
+  #  nothing queries this database yet (app.py is stateless); adding IAM
+  #  auth now means designing it twice once a real consumer exists.
   identifier     = "${var.name_prefix}-db"
   engine         = "postgres"
   engine_version = var.db_engine_version
@@ -82,6 +134,14 @@ resource "aws_db_instance" "this" {
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
+  parameter_group_name   = aws_db_parameter_group.this.name
+
+  # Exported to CloudWatch Logs so a future AI-Ops iteration has real
+  # query/error logs to reason about, not just the app's own metrics.
+  # The export alone doesn't turn on query logging, though — Postgres
+  # only writes anything to the log in the first place once the
+  # parameter group below tells it to (log_min_duration_statement).
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
 
   multi_az                   = false # single-AZ keeps a demo cluster cheap; flip to true for a prod story
   backup_retention_period    = 7

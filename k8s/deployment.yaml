@@ -1,16 +1,3 @@
-# checkov:skip=CKV_K8S_21: single-app demo project — everything else here
-#   (Lambda's EKS access policy, the CI role's edit policy, Gatekeeper's
-#   policy scope, the Probe target, the HTTPChaos experiment) is already
-#   wired to the "default" namespace; splitting aiops-app into its own
-#   namespace means renaming all of those together, not just this file.
-# checkov:skip=CKV_K8S_14: `image: REPLACED_BY_CI` is a placeholder the CI
-#   workflow's `kubectl set image` step overwrites with the immutable
-#   ${{ github.sha }} tag immediately after this manifest is applied — the
-#   committed value is never the one actually serving traffic.
-# checkov:skip=CKV_K8S_43: tags, not digests — but ECR's aiops-app
-#   repository is image_tag_mutability = "IMMUTABLE" (oidc-cicd.tf), so a
-#   tag here already can't be silently repointed to different image bytes,
-#   the exact guarantee digest-pinning exists to provide.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +5,28 @@ metadata:
   namespace: default
   labels:
     app: aiops-app
+  annotations:
+    # Checkov's Kubernetes framework only honors suppressions as metadata
+    # annotations, not plain YAML comments — a leading `# checkov:skip=`
+    # comment (what an earlier pass here used) is silently ignored and
+    # still shows up as a real failure. This is the syntax that actually
+    # works, confirmed against a local checkov run.
+    checkov.io/skip1: >-
+      CKV_K8S_21=single-app demo project — everything else here (Lambda's
+      EKS access policy, the CI role's edit policy, Gatekeeper's policy
+      scope, the Probe target, the HTTPChaos experiment) is already wired
+      to the "default" namespace; splitting aiops-app into its own
+      namespace means renaming all of those together, not just this file.
+    checkov.io/skip2: >-
+      CKV_K8S_14=image: REPLACED_BY_CI is a placeholder the CI workflow's
+      kubectl set image step overwrites with the immutable ${{ github.sha
+      }} tag immediately after this manifest is applied — the committed
+      value is never the one actually serving traffic.
+    checkov.io/skip3: >-
+      CKV_K8S_43=tags, not digests — but ECR's aiops-app repository has
+      IMMUTABLE tag mutability set (oidc-cicd.tf), so a tag here already
+      can't be silently repointed to different image bytes, the exact
+      guarantee digest-pinning exists to provide.
 spec:
   replicas: 2
   selector:
@@ -72,6 +81,10 @@ kind: Service
 metadata:
   name: aiops-app
   namespace: default
+  annotations:
+    checkov.io/skip1: >-
+      CKV_K8S_21=same reasoning as the Deployment above — "default" is
+      wired throughout this project, not unique to this Service.
 spec:
   selector:
     app: aiops-app
@@ -79,3 +92,27 @@ spec:
     - port: 80
       targetPort: 8080
   type: ClusterIP
+---
+# CKV2_K8S_6: every pod needs at least one applicable NetworkPolicy.
+# Permissive by design, not restrictive: aiops-app is a stateless demo API
+# with no data to segment traffic around, and blackbox-exporter (the only
+# real consumer) lives in a different namespace — so this allows ingress
+# on 8080 from anywhere in the cluster rather than hand-listing every
+# namespace that might reasonably probe or curl it. The point of this
+# policy is coverage (some default-deny-adjacent posture exists), not
+# fine-grained segmentation this app doesn't need yet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aiops-app
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: aiops-app
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080

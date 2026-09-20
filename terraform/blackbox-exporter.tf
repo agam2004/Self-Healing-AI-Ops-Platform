@@ -36,9 +36,29 @@ resource "kubernetes_deployment_v1" "blackbox_exporter" {
       }
 
       spec {
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 65534 # "nobody" — matches this image's own default USER, not an arbitrary choice
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
+
+        #checkov:skip=CKV_K8S_43:same reasoning as alert-forwarder.tf —
+        #  a public upstream image (prom/blackbox-exporter), version-tag
+        #  pinned but not digest-pinned, for a demo-scale deployment.
         container {
-          name  = "blackbox-exporter"
-          image = "prom/blackbox-exporter:v0.25.0" # ships a default http_2xx module — no config needed for this demo
+          name              = "blackbox-exporter"
+          image             = "prom/blackbox-exporter:v0.25.0" # ships a default http_2xx module — no config needed for this demo
+          image_pull_policy = "Always"
+
+          security_context {
+            allow_privilege_escalation = false
+            read_only_root_filesystem  = true # a stateless prober — never writes anything at runtime
+            capabilities {
+              drop = ["ALL"]
+            }
+          }
 
           port {
             name           = "http"
@@ -57,6 +77,15 @@ resource "kubernetes_deployment_v1" "blackbox_exporter" {
             }
             initial_delay_seconds = 5
             period_seconds        = 10
+          }
+
+          liveness_probe {
+            http_get {
+              path = "/"
+              port = 9115
+            }
+            initial_delay_seconds = 10
+            period_seconds        = 15
           }
         }
       }

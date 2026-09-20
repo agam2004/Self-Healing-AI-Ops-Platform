@@ -15,6 +15,8 @@
 #    scoped IAM permissions instead of sharing the node's instance role.
 
 module "eks" {
+  #checkov:skip=CKV_TF_1:same reasoning as module.vpc (vpc.tf) — pinned
+  #  to the official registry module by semver, not a raw git source.
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.0"
 

@@ -112,6 +112,13 @@ resource "aws_iam_role_policy_attachment" "attach" {
 
 # --- ECR repository ---
 resource "aws_ecr_repository" "aiops_app" {
+  #checkov:skip=CKV_AWS_136:AES256 (the default) already encrypts every
+  #  image layer at rest. A customer-managed KMS key would need to be one
+  #  of the few resources in this project that ISN'T destroyed between
+  #  sessions — every KMS key in kms.tf is, precisely because this repo
+  #  (unlike the cluster) keeps previously-pushed images across sessions.
+  #  Encrypting it with a key that gets destroyed and recreated each
+  #  session would silently orphan every image pushed under the old key.
   name                 = var.ecr_repo_name
   image_tag_mutability = "IMMUTABLE"
 

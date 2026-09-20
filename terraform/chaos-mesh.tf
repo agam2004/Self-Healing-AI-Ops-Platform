@@ -49,14 +49,23 @@ resource "kubernetes_role_v1" "chaos_operator" {
     namespace = "default"
   }
 
+  # Scoped to the one kind k8s/chaos-http-500.yaml actually applies —
+  # not a wildcard across every Chaos Mesh CRD (PodChaos, NetworkChaos,
+  # IOChaos, ...) this demo never uses. Widen this the day a second
+  # experiment kind is actually added, not preemptively.
   rule {
     api_groups = ["chaos-mesh.org"]
-    resources  = ["*"]
+    resources  = ["httpchaos"]
     verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
   }
 }
 
 resource "kubernetes_role_binding_v1" "chaos_operator" {
+  #checkov:skip=CKV_K8S_21:same reasoning as k8s/deployment.yaml — this
+  #  project wires "default" as the app namespace everywhere (the CI
+  #  role's edit policy, the Lambda's EKS access policy, the Probe
+  #  target, the HTTPChaos experiment itself); moving it means renaming
+  #  all of those together, not just this binding.
   metadata {
     name      = "aiops-chaos-operator-binding"
     namespace = "default"

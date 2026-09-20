@@ -94,9 +94,14 @@ resource "helm_release" "kube_prometheus_stack" {
               name = "aiops"
               rules = [
                 {
-                  alert  = "HighErrorRate"
-                  expr   = "probe_success{job=\"aiops-app\"} == 0"
-                  for    = "1m"
+                  alert = "HighErrorRate"
+                  expr  = "probe_success{job=\"aiops-app\"} == 0"
+                  # Quoted, not bare: `for` is a reserved word in HCL's
+                  # own grammar (for-expressions), and Checkov's bundled
+                  # hcl2 parser — a separate, simpler implementation than
+                  # Terraform's own — chokes on it as an unquoted map key
+                  # even though real `terraform validate` accepts it fine.
+                  "for"  = "1m"
                   labels = { severity = "critical", namespace = "default", deployment = "aiops-app" }
                   annotations = {
                     summary     = "aiops-app is failing its HTTP health probe"

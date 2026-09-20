@@ -58,11 +58,44 @@ resource "kubernetes_deployment_v1" "alert_forwarder" {
       spec {
         service_account_name = kubernetes_service_account_v1.alert_forwarder.metadata[0].name
 
-        container {
-          name    = "forwarder"
-          image   = "public.ecr.aws/docker/library/python:3.12-slim"
-          command = ["sh", "-c", "pip install --quiet --no-cache-dir boto3 && python /app/forwarder.py"]
+        security_context {
+          run_as_non_root = true
+          run_as_user     = 1000
+          seccomp_profile {
+            type = "RuntimeDefault"
+          }
+        }
 
+        #checkov:skip=CKV_K8S_43:public.ecr.aws/docker/library/python is a
+        #  floating upstream base image, not this project's own IMMUTABLE
+        #  ECR repo — pinning to a digest here means hand-tracking
+        #  upstream Python patch releases for a helper container whose
+        #  whole job is "run 40 lines of stdlib http.server," a
+        #  maintenance cost the security gain doesn't justify at this
+        #  scale. aiops-app's own image (k8s/deployment.yaml), the one
+        #  that matters, is already tag-pinned against an IMMUTABLE repo.
+        #checkov:skip=CKV_K8S_22:this container's own startup command
+        #  (`pip install --user boto3`) genuinely needs to write to the
+        #  filesystem — it installs its one dependency at container start
+        #  rather than baking a custom image for a 40-line script. The
+        #  trade-off is real: read-only-root-fs for a build step, or a
+        #  proper Dockerfile + ECR push for a helper this small. Chose the
+        #  simpler pipeline; runAsNonRoot + all-capabilities-dropped still
+        #  hold even with a writable root filesystem.
+        container {
+          name  = "forwarder"
+          image = "public.ecr.aws/docker/library/python:3.12-slim"
+          # --user (not a system-wide install) + HOME=/tmp: this
+          # container runs as a non-root UID with no writable system
+          # site-packages directory, so boto3 has to land somewhere that
+          # UID can actually write to.
+          command           = ["sh", "-c", "pip install --user --quiet --no-cache-dir boto3 && python /app/forwarder.py"]
+          image_pull_policy = "Always"
+
+          env {
+            name  = "HOME"
+            value = "/tmp"
+          }
           env {
             name  = "LAMBDA_FUNCTION_NAME"
             value = aws_lambda_function.root_cause_responder.function_name
@@ -70,6 +103,13 @@ resource "kubernetes_deployment_v1" "alert_forwarder" {
           env {
             name  = "AWS_REGION"
             value = var.region
+          }
+
+          security_context {
+            allow_privilege_escalation = false
+            capabilities {
+              drop = ["ALL"]
+            }
           }
 
           port {
@@ -93,6 +133,15 @@ resource "kubernetes_deployment_v1" "alert_forwarder" {
             }
             initial_delay_seconds = 15
             period_seconds        = 10
+          }
+
+          liveness_probe {
+            http_get {
+              path = "/"
+              port = 8080
+            }
+            initial_delay_seconds = 20
+            period_seconds        = 15
           }
         }
 

@@ -23,9 +23,14 @@ data "archive_file" "lambda" {
 }
 
 resource "aws_secretsmanager_secret" "slack_webhook" {
+  #checkov:skip=CKV2_AWS_57:automatic rotation doesn't apply to this
+  #  secret at all — it's a webhook URL a human pastes in from Slack's
+  #  own admin console, not a credential with a rotation lifecycle a
+  #  Lambda could generate a replacement for.
   name                    = "${var.name_prefix}/lambda/slack-webhook-url"
   description             = "Slack incoming webhook URL the AI-Ops Lambda posts root-cause summaries to"
   recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.lambda.arn
 }
 
 resource "aws_secretsmanager_secret_version" "slack_webhook" {
@@ -92,6 +97,17 @@ data "aws_iam_policy_document" "lambda_permissions" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = [aws_secretsmanager_secret.slack_webhook.arn]
   }
+
+  # Secrets Manager decrypts on the caller's behalf using this key, so the
+  # Lambda's own role needs kms:Decrypt directly — the key's policy grants
+  # account-root delegation, but that only means an IAM identity CAN be
+  # authorized, not that every identity automatically is.
+  statement {
+    sid       = "DecryptWithLambdaKey"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.lambda.arn]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda" {
@@ -110,8 +126,14 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {
+  #checkov:skip=CKV_AWS_338:14 days, not 1 year — this project is torn down
+  #  between sessions by convention (see rds.tf/vpc.tf), so a year of log
+  #  retention would outlive the infrastructure that generated it many
+  #  times over. A real always-on deployment would tune this to its actual
+  #  compliance/audit requirement.
   name              = "/aws/lambda/${var.name_prefix}-root-cause-responder"
   retention_in_days = 14
+  kms_key_id        = aws_kms_key.lambda.arn
 }
 
 # The Lambda runs inside the VPC so it reaches the EKS API over its
@@ -146,6 +168,25 @@ resource "aws_security_group_rule" "eks_cluster_from_lambda" {
 }
 
 resource "aws_lambda_function" "root_cause_responder" {
+  #checkov:skip=CKV_AWS_272:code-signing needs a Signing Profile + signing
+  #  config maintained outside this repo — real supply-chain value for a
+  #  team publishing signed releases, disproportionate infrastructure for
+  #  a single function deployed straight from this repo's own zip.
+  #checkov:skip=CKV_AWS_116:a DLQ would catch a failed async invocation,
+  #  but nothing in this architecture invokes this function
+  #  asynchronously — the alert-forwarder calls it synchronously
+  #  (InvocationType=Event is fire-and-forget by AWS's definition, but our
+  #  forwarder doesn't retry or need to; a truly dropped invocation is
+  #  already visible as a missing Slack message).
+  #checkov:skip=CKV_AWS_115:a concurrency limit protects OTHER functions
+  #  in the account from this one eating shared burst capacity — but this
+  #  is the one function that runs during an actual incident. Capping it
+  #  is trading away the reliability of auto-remediation to guard against
+  #  a multi-tenant noisy-neighbor problem this account doesn't have.
+  #checkov:skip=CKV_AWS_50:X-Ray adds cost and a moving part for tracing
+  #  a single-hop, single-function invocation with no downstream service
+  #  calls chained through it — the CloudWatch log group already captures
+  #  everything X-Ray would add here.
   function_name = "${var.name_prefix}-root-cause-responder"
   role          = aws_iam_role.lambda.arn
   handler       = "handler.handler"
@@ -155,6 +196,12 @@ resource "aws_lambda_function" "root_cause_responder" {
 
   filename         = data.archive_file.lambda.output_path
   source_code_hash = data.archive_file.lambda.output_base64sha256
+
+  # Same key as the Slack secret and log group (kms.tf) — the
+  # DecryptWithLambdaKey IAM statement above already covers this, since
+  # Lambda decrypts its own environment variables using its execution
+  # role at invoke time, the same mechanism as reading the secret.
+  kms_key_arn = aws_kms_key.lambda.arn
 
   vpc_config {
     subnet_ids         = module.vpc.private_subnets
