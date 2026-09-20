@@ -1,3 +1,16 @@
+# checkov:skip=CKV_K8S_21: single-app demo project — everything else here
+#   (Lambda's EKS access policy, the CI role's edit policy, Gatekeeper's
+#   policy scope, the Probe target, the HTTPChaos experiment) is already
+#   wired to the "default" namespace; splitting aiops-app into its own
+#   namespace means renaming all of those together, not just this file.
+# checkov:skip=CKV_K8S_14: `image: REPLACED_BY_CI` is a placeholder the CI
+#   workflow's `kubectl set image` step overwrites with the immutable
+#   ${{ github.sha }} tag immediately after this manifest is applied — the
+#   committed value is never the one actually serving traffic.
+# checkov:skip=CKV_K8S_43: tags, not digests — but ECR's aiops-app
+#   repository is image_tag_mutability = "IMMUTABLE" (oidc-cicd.tf), so a
+#   tag here already can't be silently repointed to different image bytes,
+#   the exact guarantee digest-pinning exists to provide.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,12 +28,23 @@ spec:
       labels:
         app: aiops-app
     spec:
+      automountServiceAccountToken: false   # this pod never calls the K8s API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001   # high, non-system UID — avoids colliding with a host UID
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: aiops-app
           # Placeholder tag — the CI workflow's `kubectl set image` step
           # replaces this with the freshly built ${{ github.sha }} tag on
           # every push to main.
           image: REPLACED_BY_CI
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 8080
           readinessProbe:
