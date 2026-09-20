@@ -36,10 +36,15 @@ jobs:
           GITLEAKS_ENABLE_SUMMARY: true
 
       - name: Semgrep (SAST)
-        uses: semgrep/semgrep-action@v1
+        # semgrep/semgrep-action@v1 is the old r2c "Semgrep App" agent — it
+        # has no SARIF output at all, so it can't feed the Security tab.
+        # Running the CLI directly (official image) is the current way to
+        # get a real semgrep.sarif file out of CI.
+        uses: docker://semgrep/semgrep:latest
+        continue-on-error: true   # let the SARIF upload run and surface findings even if this exits non-zero
         with:
-          config: p/ci
-          generateSarif: "1"
+          entrypoint: semgrep
+          args: scan --config=p/ci --sarif --output=semgrep.sarif .
 
       - name: Upload Semgrep SARIF
         uses: github/codeql-action/upload-sarif@v4
@@ -49,6 +54,7 @@ jobs:
           category: semgrep
 
       - name: Trivy filesystem scan (dependency CVEs)
+        if: always()
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
