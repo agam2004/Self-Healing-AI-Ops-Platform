@@ -1,0 +1,7 @@
+Error from server (Forbidden): error when creating "gatekeeper/demo-violation.yaml": admission webhook "validation.gatekeeper.sh" denied the request: [require-resource-limits] container <bad-container> is missing spec.resources.limits.cpu
+[require-resource-limits] container <bad-container> is missing spec.resources.limits.memory
+[require-resource-limits] container <bad-container> is missing spec.resources.requests.cpu
+[require-resource-limits] container <bad-container> is missing spec.resources.requests.memory
+[disallow-privileged-containers] container <bad-container> sets securityContext.privileged=true
+[block-latest-tag] container <bad-container> uses disallowed tag <latest>
+captured on 2026-09-20T12:39:17Z
